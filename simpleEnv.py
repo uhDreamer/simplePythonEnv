@@ -23,7 +23,6 @@ def stdoutIO(stdout=None):
     sys.stdout = old
 
 class GUI():
-    # TODO(dreamer): HOW DO I HANDLE USER INPUT????
     def __init__(self, window):
         self.engine = Engine.load()
         
@@ -31,6 +30,9 @@ class GUI():
         
         self.state_str = tk.StringVar()
         self.state_str.set("Stopped")
+        
+        self.user_input_str = tk.StringVar()
+        self.input_needed = False
         
         self.window = window
         self.window.protocol("WM_DELETE_WINDOW", self.quit)
@@ -99,26 +101,32 @@ class GUI():
         code = self.code_text.get(1.0, tk.END)
         self.clearCodeText()
         
-        while code[-1] == "\n":
-            code = code[:-1]
-        code = code + "\n"
+        if not self.input_needed:
         
-        self.log(code)
-        if self.engine.running:
-            self.engine.addToStack("""{}""".format(code))
+            while code[-1] == "\n":
+                code = code[:-1]
+            code = code + "\n"
             
-    def log(self, val):
-        # if val[-1] == "\n":
-        #     val = val[:-1]
-        if not self.engine_text.compare("end-1c", "==", "1.0"):
-            val = "\n" + val
-        
-        
-        self.engine_text.configure(state=tk.NORMAL)
-        self.engine_text.insert(tk.END, val)
-        
-        self.engine_text.yview(tk.END)
-        self.engine_text.configure(state=tk.DISABLED)
+            self.log(code, "IN")
+            if self.engine.running:
+                self.engine.addToStack("""{}""".format(code))
+                
+        else:
+            self.user_input_str.set(code)
+            
+    def log(self, val, source=""):
+        if val:
+            if source:
+                val = "[" + source + "]: " + val
+            if not self.engine_text.compare("end-1c", "==", "1.0"):
+                val = "\n" + val
+            
+            
+            self.engine_text.configure(state=tk.NORMAL)
+            self.engine_text.insert(tk.END, val)
+            
+            self.engine_text.yview(tk.END)
+            self.engine_text.configure(state=tk.DISABLED)
 
 class Engine():
     SAVE_FOLDER = "data"
@@ -156,6 +164,32 @@ class Engine():
     def addToHistory(self, code):
         self.history.append(code)
         
+    def adjustCode(self, code):
+        new_code = code
+        
+        while "input(" in new_code:
+            gui.input_needed = True
+            input_start_pos = new_code.index("input(")
+            input_stop_pos = input_start_pos + new_code[input_start_pos:].index(")") + 1
+            input_str = new_code[input_start_pos:input_stop_pos]
+            prompt_start_pos = input_str.index('"') + 1
+            prompt_end_pos = prompt_start_pos + input_str[prompt_start_pos:].index('"')
+            prompt = input_str[prompt_start_pos:prompt_end_pos]
+            gui.log(prompt)
+            
+            while not gui.user_input_str.get():
+                time.sleep(.1)
+                if not self.running:
+                    return
+                    
+            replacement = gui.user_input_str.get()[:-1]
+            gui.user_input_str.set("")
+            gui.input_needed = False
+            gui.log(replacement+"\n")
+            new_code = """{}""".format(new_code[:input_start_pos] + '"' + replacement + '"' + new_code[input_stop_pos:])
+            gui.log(new_code, "IN")
+        return new_code
+        
     def start(self):
         if self.running:
             return
@@ -171,40 +205,50 @@ class Engine():
             try:
                 self.thread.join(1)
             except:
-                time.sleep(.01)
+                time.sleep(.1)
         self.thread = None
         
     def run(self):
         for i in range(len(self.startup)):
             code = self.startup[i]
+            
+            new_code = self.adjustCode(code)
+            
+            if not self.running:
+                return
+            
             with stdoutIO() as out:
                 try:
-                    gui.log(code+"\n")
-                    exec(code)
+                    gui.log(new_code, "IN")
+                    exec(new_code)
                 except Exception as e:
-                    gui.log(e)
+                    gui.log(e, "ERR")
                     del self.startup[i]
                     i -= 1
                 finally:
-                    self.history.append(code)
-            gui.log(out.getvalue())
+                    self.history.append(new_code)
+            gui.log(out.getvalue(), "OUT")
                 
         while self.running:
             if self.stack:
                 code = self.stack.pop()
+                
+                new_code = self.adjustCode(code)
+                
+                if not self.running:
+                    return
+                
                 with stdoutIO() as out:
                     try:
-                        exec(code)
+                        exec(new_code)
                     except Exception as e:
-                        gui.log(str(e))
+                        gui.log(str(e), "ERR")
                     finally:
-                        self.addToHistory(code)
-                gui.log(out.getvalue())
+                        self.addToHistory(new_code)
+                gui.log(out.getvalue(), "OUT")
             else:
                 time.sleep(.1)
     
 root = tk.Tk()
 gui = GUI(root)
-
-
 root.mainloop()
